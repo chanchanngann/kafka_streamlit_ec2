@@ -89,20 +89,21 @@ MSCK REPAIR TABLE rachel.stock1;
 ```
 
 6. The infrastructure is done, check for the result
-	- In the specified S3 bucket, data (in parquet format) should be ingested on a regular time interval of 10mins.
+  - In the specified S3 bucket, data (in parquet format) should be ingested on a regular time interval of 10mins.
 	  Same filename is being used during data ingestion, so data will only be updated instead of being appended.
 	  As I dont need accumulated data for the same date and I just want the most updated price for each date.
 	  
-	- At Athena, we can query the data in S3.
+  - At Athena, we can query the data in S3.
 
 ```
   select * from rachel.stock1;
 ```
-   - Go to the browser and enter the following URL, the streamlit dashboard will show up.
-```12.34.56.78:8501```
-    Prior to feeding real-time data, I pulled recent 3 months of data and save them in S3. 
-  	Thus we can review the price trend of Kakaopay for the recent 3 months in a line chart.
+   - Go to the browser and enter the URL ```12.34.56.78:8501```, the streamlit dashboard will show up.
+     Prior to feeding real-time data, I pulled recent 3 months of data and save them in S3. 
+     Thus we can review the price trend of Kakaopay for the recent 3 months in a line chart.
 
+![aws architecture](/streamlit_dashb_1.PNG)
+ 
 ### Notes
 1. In the EC2 security group -> inbound rule setting, we need to add the following ports.
    The security group setting is included in the cloudformation template.
