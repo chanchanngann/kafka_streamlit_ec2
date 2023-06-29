@@ -14,7 +14,7 @@ The outcome will be shown on Streamlit dashboard -> a simple price trend of the 
 ![aws architecture](/architecture.png)
 
 ## Steps
-1. Launch EC2 using the cloudformation template
+1. Launch EC2 using the cloudformation template. For the sake of easy implementation, IP 0.0.0.0/0 is entered for security group setting. It'd be better to use your own IP instead.
 
 ```aws cloudformation create-stack --stack-name kafka-streamlit-dashb --template-body file:///Users/somewhere/ec2_cfn_template.yaml --capabilities CAPABILITY_NAMED_IAM```
 
@@ -35,19 +35,19 @@ scp -i rachel.pem kafka/prd/producer.py ec2-user@12.34.56.78:~/.
 scp -i rachel.pem kafka/prd/consumer.py ec2-user@12.34.56.78:~/.
 scp -i rachel.pem kafka/prd/stock_app.py ec2-user@12.34.56.78:~/.
 ```
-4. Run the kickoff script in EC2 shell, you will be prompted to enter EC2 public IP.
+4. Run the kickoff script in EC2 shell, you will be prompted to enter EC2 public IP (if not provided in argument).
 
 ```
 cd ~
 chmod 744 ./kickoff.sh
-./kickoff.sh
+./kickoff.sh 12.34.56.78
 ```
 
 ##### What does kickoff.sh do here?
 - install python3.8
 - set up python virtual environment 
 - install all the required packages/dependencies
-- donwload and install kafka
+- download and install kafka
 - kick off zookeeper followed by kafka server
 - create kafka topic 
 - start kafka producer & consumer to ingest real-time data
