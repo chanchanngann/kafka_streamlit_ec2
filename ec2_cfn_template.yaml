@@ -1,0 +1,284 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create a EC2 in public subnet 
+
+Parameters:
+  NamingPrefix:
+    Description: The naming prefix for resources created by this template.
+    Type: String
+    Default: kafka
+  VpcCidrBlock:
+    Description: CIDR block of VPC
+    Type: String
+    Default: 10.0.0.0/16
+  PublicSubnetACidrBlock:
+    Description: CIDR block of VPC
+    Type: String
+    Default: 10.0.16.0/20
+  SSHLocation:
+    Description: 'The IP address range that can be used to access the web server using SSH.'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x. 
+    Default:  0.0.0.0/0 #x.x.x.x/32  my ip address
+  KeyName:
+    Description: Name of an EC2 KeyPair to enable SSH access to the instance.
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    ConstraintDescription: must be the name of an existing EC2 KeyPair
+    Default: rachel #pls enter the keypair name here
+  AmiId:
+    Description: Amazon Linux 2 AMI (HVM), SSD Volume Type, 64-bit (x86), Root device type - ebs 
+    Type: String
+    Default: 'ami-0a0de518b1fc4524c'
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.micro
+  AthenaPolicy:
+    Description: ARN of the IAM Managed Policy to add to the EC2 role
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonAthenaFullAccess
+
+
+Resources:
+
+  ###########
+  # VPC
+  ###########    
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidrBlock #you can define the IP address range in CIDR notation
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true' #allocate automatically DNS name to each EC2 instance we deploy in the VPC
+      InstanceTenancy: default #This parameter has only effect if we don't specify a tenancy for the EC2 instance during launch
+      Tags: #Tags are quite useful to differentiate resources 
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - VPC  
+  ###########
+  # Subnet A
+  ###########    
+
+  #Each subnet is provisioned in the first availability zone in the current region
+  #Each subnet is placed inside the VPC defined earlier
+  #These IP ranges are non-overlapping and fall within the overall VPC's IP range
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: !Ref PublicSubnetACidrBlock
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - PublicSubnetA       
+        - Key: Reach
+          Value: public
+
+  ###########
+  # Internet Gateway
+  ###########    
+  #InternetGateway allows instances within the VPC to access the internet
+  #also allows the internet to access servers within the public subnet
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  AttachGateway: #associate InternetGateway with our VPC
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  ###########
+  # Route Table to Internet
+  ###########  
+  PublicRouteTable: #associates RouteTable itself with a VPC
+    DependsOn: AttachGateway #define a dependency
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC 
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - PublicRTB 
+  PublicDefaultRoute: #points an IP address range to a gateway
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0 #0.0.0.0/0 is the most common network with all addresses from 0.0.0.0 to 255.255.255.255
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+  PublicRouteAssociationA: #wires up the route table to a subnet
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+
+  ###########
+  # Network Acl
+  ########### 
+  PublicNetworkAcl:
+    Type: 'AWS::EC2::NetworkAcl'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Join ['-',[!Ref NamingPrefix, 'PublicNetworkAcl']]
+  SubnetNetworkAclAssociationPublic:
+    Type: 'AWS::EC2::SubnetNetworkAclAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      NetworkAclId: !Ref PublicNetworkAcl
+  NetworkAclEntryInPublicAllowVPC:
+    Type: 'AWS::EC2::NetworkAclEntry'
+    Properties:
+      NetworkAclId: !Ref PublicNetworkAcl
+      RuleNumber: 99
+      Protocol: -1
+      RuleAction: allow
+      Egress: false
+      CidrBlock: '0.0.0.0/0'
+  NetworkAclEntryOutPublicAllowVPC:
+    Type: 'AWS::EC2::NetworkAclEntry'
+    Properties:
+      NetworkAclId: !Ref PublicNetworkAcl
+      RuleNumber: 99
+      Protocol: -1
+      RuleAction: allow
+      Egress: true
+      CidrBlock: '0.0.0.0/0'
+
+
+  ###########
+  # Public Security Group
+  ###########
+  PublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupName: ec2-publicSG
+      GroupDescription: >-
+        Enable SSH traffic and HTTP access via port 80 and 443 to the allowed CIDR
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'  #80 for http (unsecured websites)
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0 
+        - IpProtocol: tcp
+          FromPort: '443' #443 for https (secured websites)
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0 
+        - IpProtocol: tcp
+          FromPort: 22 #SSH
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+        - IpProtocol: tcp
+          FromPort: 9092 #kafka
+          ToPort: 9092
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 2181 #zookeeper
+          ToPort: 2181
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8501 #streamlit
+          ToPort: 8501
+          CidrIp: !Ref SSHLocation
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - pulicSG  
+
+  ###########
+  # Public ec2 
+  ###########
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      #AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref PublicInstanceProfile
+      NetworkInterfaces: #NetworkInterfaces property is the only way to give the web server a public IP (and DNS name) 
+        - GroupSet:
+            - !Ref PublicSecurityGroup
+          AssociatePublicIpAddress: 'true'
+          DeviceIndex: '0'
+          DeleteOnTermination: 'true'
+          SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value:  !Join ['-',[!Ref NamingPrefix, 'ins']]
+
+  ###################
+  # Instance Profile
+  ###################
+  PublicInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: ec2-public-instance-profile
+      Path: /
+      Roles:
+        - !Ref EC2InstanceRole
+
+  #################################
+  # IAM Role for EC2 to access S3
+  #################################
+  EC2InstanceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: S3RoleForEC2-rachelCF3
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - !Ref AthenaPolicy
+      Policies:
+        - PolicyName: AmazonS3FullAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 's3:*'
+                Resource: '*'
+
+Outputs:
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
+    Export:
+      Name: 'stackname'
+  VPCId:
+    Value: !Ref VPC
+    Export:
+      Name: 'vpcid'  
+  PublicSubnetA:
+    Value: !Ref PublicSubnetA
+    Export:
+      Name: 'public-subnet-A'
+  ec2PublicSecurityGroup:
+    Value: !Ref PublicSecurityGroup
+    Export:
+      Name: 'ec2-public-security-group'  

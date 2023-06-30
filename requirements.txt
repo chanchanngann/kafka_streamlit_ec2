@@ -1,0 +1,8 @@
+kafka-python
+pandas
+awswrangler
+s3fs
+yfinance
+streamlit
+altair
+plotly_express
